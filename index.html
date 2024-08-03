@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>D1Q3</title>
+</head>
+
+<body>
+    <!-- <script src="./pkg/wasm_lbm.js"></script> -->
+    <!-- <script>
+        greet();
+    </script> -->
+
+    <script type="module">
+        // see: https://users.rust-lang.org/t/error-importing-wasm-wasm-bindgen-for-web-error/83370/3
+        //      https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html
+        import init, { D1Q3, wasm_memory } from "./static/wasm_lbm.js";
+
+        await init();
+
+        async function run() {
+
+            const ch = 500;
+            const cw = 800;
+            const nx = 2000;
+
+            const temp = 1.00;
+            const tau = 4;
+
+            const rho_z = 1.0;
+            const rho_s = 1e4 * 1; // 1 bp = 1 px
+
+            const vel_z = 0.0;
+            const vel_s = 1e4 * 2; // 1 bp = 2 px
+
+            var lbm = D1Q3.new(nx, temp);
+
+            var rho = new Float32Array(wasm_memory().buffer, lbm.rho_(), nx);
+            var vel = new Float32Array(wasm_memory().buffer, lbm.vel_(), nx);
+
+            function add_gauss(arr, loc, std, scale) {
+                for (let i = 0; i < nx; i++) {
+                    arr[i] += scale * Math.exp(-(i - loc) * (i - loc) / (std * std)); // / Math.sqrt(2 * Math.PI * std);
+                }
+            }
+
+            function rescale(arr, avg_val) {
+                var sum = 0.0;
+                for (let i = 0; i < nx; i++) {
+                    sum += arr[i];
+                }
+                sum /= nx;
+                for (let i = 0; i < nx; i++) {
+                    arr[i] *= (avg_val / sum);
+                }
+            }
+
+            lbm.reinit();
+
+            const canvas = document.getElementById("canvas");
+            const ctx = canvas.getContext("2d");
+
+            canvas.addEventListener("click", event => {
+                const boundingRect = canvas.getBoundingClientRect();
+
+                const scaleX = canvas.width / boundingRect.width;
+                const scaleY = canvas.height / boundingRect.height;
+
+                const canvasLeft = (event.clientX - boundingRect.left) * scaleX;
+                const canvasTop = (event.clientY - boundingRect.top) * scaleY;
+
+
+                const x = (canvasLeft / cw) * nx;
+
+                add_gauss(rho, x, 15, 0.1);
+                // add_gauss(rho, (canvasLeft - 30) % nx, 5, -0.25);
+                // add_gauss(rho, (canvasLeft + 30) % nx, 5, -0.25);
+
+                // add_gauss(vel, canvasLeft, 15, 0.01);
+
+                rescale(rho, 1.0);
+                lbm.reinit();
+
+
+            });
+
+            canvas.height = ch;
+            canvas.width = cw;
+
+
+            const rho_col = "#410967";
+            const vel_col = "#fba40a";
+
+            const drawPlot = () => {
+                ctx.clearRect(0, 0, cw, ch)
+
+                // draw density
+                ctx.beginPath();
+                ctx.moveTo(0, ch / 2 - (rho[0] - rho_z) * rho_s);
+                for (let i = 0; i < nx; i++) {
+                    const x = i * (cw / nx)
+                    ctx.lineTo(x, ch / 2 - (rho[i] - rho_z) * rho_s);
+                }
+                ctx.strokeStyle = rho_col;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // draw velocity
+                ctx.beginPath();
+                ctx.moveTo(0, ch / 2 - (vel[0] - vel_z) * vel_s);
+                for (let i = 0; i < nx; i++) {
+                    const x = i * (cw / nx)
+                    ctx.lineTo(x, ch / 2 - (vel[i] - vel_z) * vel_s);
+                }
+                ctx.strokeStyle = vel_col;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // draw axis line
+                ctx.beginPath();
+                ctx.moveTo(0, ch / 2);
+                ctx.lineTo(cw, ch / 2);
+                ctx.lineWidth = 0.5;
+                ctx.strokeStyle = "gray";
+                ctx.stroke();
+
+                requestAnimationFrame(drawPlot);
+
+                for (let n = 0; n < 25; n++) {
+                    lbm.step(tau);
+                }
+
+                var max_rho = 0.0;
+                var max_vel = 0.0;
+
+                for (let i = 0; i < nx; ++i) {
+                    max_rho = Math.max(max_rho, rho[i]);
+                    max_vel = Math.max(max_vel, Math.abs(vel[i]));
+                }
+
+                document.getElementById("disp_max").textContent = "rho = " + max_rho + ", vel=" + max_vel;
+
+                // TODO: regularize extreme values
+            }
+
+            drawPlot();
+        }
+
+        run();
+    </script>
+
+    <canvas id="canvas">
+    </canvas>
+    <p>
+        <span style="color: #410967; font-family: monospace;">-- Density </span>
+        <span style="color: #fba40a; font-family: monospace;">-- Velocity</span><br />
+        <span style="font-family: monospace;" id="disp_max">FOO</span>
+    </p>
+
+</body>
+
+</html>
