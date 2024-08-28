@@ -1,6 +1,6 @@
-use std::ops::{Add, Index, IndexMut, Mul, Sub};
+use std::ops::{Add, Div, Index, IndexMut, Mul, Sub};
 
-use num_traits::{One, Zero};
+use num_traits::{AsPrimitive, One, Zero};
 
 // S => "static" vector, i.e. size known at compile time
 #[derive(Debug, Clone, Copy)]
@@ -13,6 +13,16 @@ impl<T, const D: usize> VectS<T, D> {
         Self { data: data }
     }
 
+    pub fn cast<S>(&self) -> VectS<S, D>
+    where
+        T: AsPrimitive<S>,
+        S: Copy + 'static,
+    {
+        VectS::<S, D> {
+            data: self.data.map(|x| x.as_()),
+        }
+    }
+
     pub fn sum(&self) -> T
     where
         T: Zero + Add<Output = T> + Copy,
@@ -22,6 +32,41 @@ impl<T, const D: usize> VectS<T, D> {
             out = out + self[d];
         }
         return out;
+    }
+
+    pub fn prod(&self) -> T
+    where
+        T: One + Mul<T> + Copy,
+    {
+        let mut out = T::one();
+        for i in 0..D {
+            out = out * self[i];
+        }
+        out
+    }
+
+    pub fn cumprod(&self) -> Self
+    where
+        T: One + Mul<Output = T> + Copy,
+    {
+        let mut out = Self::one();
+        out[0] = self[0];
+        for i in 1..D {
+            out[i] = out[i - 1] * self[i];
+        }
+        out
+    }
+
+    pub fn cumsum(&self) -> Self
+    where
+        T: One + Add<Output = T> + Copy,
+    {
+        let mut out = Self::one();
+        out[0] = self[0];
+        for i in 1..D {
+            out[i] = out[i - 1] + self[i];
+        }
+        out
     }
 }
 
@@ -110,6 +155,21 @@ where
     }
 }
 
+impl<T, const D: usize> Div for VectS<T, D>
+where
+    T: One + Copy + Div<Output = T>,
+{
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        let mut out = Self::one();
+        for d in 0..D {
+            out[d] = self[d] / rhs[d];
+        }
+        return out;
+    }
+}
+
 impl<T, const D: usize> Mul<T> for VectS<T, D>
 where
     T: Copy + Mul<Output = T>,
@@ -119,6 +179,19 @@ where
     fn mul(self, rhs: T) -> Self::Output {
         Self {
             data: self.data.map(|x| x * rhs),
+        }
+    }
+}
+
+impl<T, const D: usize> Div<T> for VectS<T, D>
+where
+    T: Copy + Div<Output = T>,
+{
+    type Output = Self;
+
+    fn div(self, rhs: T) -> Self::Output {
+        Self {
+            data: self.data.map(|x| x / rhs),
         }
     }
 }
