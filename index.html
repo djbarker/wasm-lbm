@@ -7,37 +7,58 @@
 </head>
 
 <body>
-    <!-- <script src="./pkg/wasm_lbm.js"></script> -->
-    <!-- <script>
-        greet();
-    </script> -->
+
+    <canvas id="canvas" style="max-width: 100%;">
+    </canvas>
+
+    <div style="display: flex; justify-content: space-around">
+        <div
+            style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; width: 75%; max-width: 600px;">
+            <div>
+                <span style="color: #bb2344; font-family: monospace;">-- Density </span>
+                <span style="color: #fba40a; font-family: monospace;">-- Velocity</span>
+            </div>
+            <span style="padding-right: 0.8em; display: flex; flex-direction: row; align-items: center">
+                $\tau\,\,$ <input type="range" id="slider_tau" min="1" max="30" step="0.5" />
+            </span>
+            <span>
+                <button id="reset_button" onclick="reset()">Reset</button>
+            </span>
+        </div>
+    </div>
 
     <script type="module">
         // see: https://users.rust-lang.org/t/error-importing-wasm-wasm-bindgen-for-web-error/83370/3
         //      https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html
+        // import init, { D1Q3, wasm_memory } from "/wasm/lbm_1d/static/wasm_lbm.js";
         import init, { D1Q3, wasm_memory } from "./static/wasm_lbm.js";
+
 
         await init();
 
+        const ch = 500;
+        const cw = 800;
+        const nx = 2000;
+
+        var temp = 1.00;
+        var tau = 4;
+
+        const rho_z = 1.0;
+        const rho_s = 1e4 * 1; // 1 bp = 1 px
+
+        const vel_z = 0.0;
+        const vel_s = 1e4 * 2; // 1 bp = 2 px
+
+        var lbm;
+        var rho;
+        var vel;
+
         async function run() {
 
-            const ch = 500;
-            const cw = 800;
-            const nx = 2000;
+            lbm = D1Q3.new(nx);
 
-            const temp = 1.00;
-            const tau = 4;
-
-            const rho_z = 1.0;
-            const rho_s = 1e4 * 1; // 1 bp = 1 px
-
-            const vel_z = 0.0;
-            const vel_s = 1e4 * 2; // 1 bp = 2 px
-
-            var lbm = D1Q3.new(nx, temp);
-
-            var rho = new Float32Array(wasm_memory().buffer, lbm.rho_(), nx);
-            var vel = new Float32Array(wasm_memory().buffer, lbm.vel_(), nx);
+            rho = new Float32Array(wasm_memory().buffer, lbm.rho_(), nx);
+            vel = new Float32Array(wasm_memory().buffer, lbm.vel_(), nx);
 
             function add_gauss(arr, loc, std, scale) {
                 for (let i = 0; i < nx; i++) {
@@ -46,7 +67,7 @@
             }
 
             function rescale(arr, avg_val) {
-                var sum = 0.0;
+                let sum = 0.0;
                 for (let i = 0; i < nx; i++) {
                     sum += arr[i];
                 }
@@ -56,7 +77,7 @@
                 }
             }
 
-            lbm.reinit();
+            lbm.reinit(temp);
 
             const canvas = document.getElementById("canvas");
             const ctx = canvas.getContext("2d");
@@ -74,13 +95,10 @@
                 const x = (canvasLeft / cw) * nx;
 
                 add_gauss(rho, x, 15, 0.1);
-                // add_gauss(rho, (canvasLeft - 30) % nx, 5, -0.25);
-                // add_gauss(rho, (canvasLeft + 30) % nx, 5, -0.25);
-
-                // add_gauss(vel, canvasLeft, 15, 0.01);
+                // add_gauss(vel, canvasLeft, 15, 0.1);
 
                 rescale(rho, 1.0);
-                lbm.reinit();
+                lbm.reinit(temp);
 
 
             });
@@ -88,8 +106,8 @@
             canvas.height = ch;
             canvas.width = cw;
 
-
-            const rho_col = "#410967";
+            // const rho_col = "#410967";
+            const rho_col = "#bb2344";
             const vel_col = "#fba40a";
 
             const drawPlot = () => {
@@ -128,35 +146,29 @@
                 requestAnimationFrame(drawPlot);
 
                 for (let n = 0; n < 25; n++) {
-                    lbm.step(tau);
+                    lbm.step(tau, temp);
                 }
-
-                var max_rho = 0.0;
-                var max_vel = 0.0;
-
-                for (let i = 0; i < nx; ++i) {
-                    max_rho = Math.max(max_rho, rho[i]);
-                    max_vel = Math.max(max_vel, Math.abs(vel[i]));
-                }
-
-                document.getElementById("disp_max").textContent = "rho = " + max_rho + ", vel=" + max_vel;
-
-                // TODO: regularize extreme values
             }
 
             drawPlot();
         }
 
+        function reset() {
+            for (let i = 0; i < nx; i++) {
+                rho[i] = 1.0;
+                vel[i] = 0.0;
+            }
+            lbm.reinit();
+        }
+
+        document.getElementById("reset_button").addEventListener("click", reset);
+        document.getElementById("slider_tau").addEventListener("input", (event) => {
+            tau = event.target.value;
+        });
+
         run();
     </script>
 
-    <canvas id="canvas">
-    </canvas>
-    <p>
-        <span style="color: #410967; font-family: monospace;">-- Density </span>
-        <span style="color: #fba40a; font-family: monospace;">-- Velocity</span><br />
-        <span style="font-family: monospace;" id="disp_max">FOO</span>
-    </p>
 
 </body>
 
