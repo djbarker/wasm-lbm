@@ -11,15 +11,26 @@
     <canvas id="canvas" style="max-width: 100%;">
     </canvas>
 
-    <div style="display: flex; justify-content: space-around">
+    <div style="display: flex; justify-content: space-around; flex-direction: column; align-items: center;">
         <div
-            style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; width: 75%; max-width: 600px;">
+            style="display: flex; flex-direction: row; align-items: center; justify-content: space-around; width: 75%; max-width: 600px; margin-bottom: 0.8em;">
             <div>
                 <span style="color: #bb2344; font-family: monospace;">-- Density </span>
                 <span style="color: #fba40a; font-family: monospace;">-- Velocity</span>
             </div>
+        </div>
+        <div
+            style="display: flex; flex-direction: row; align-items: center; justify-content: space-around; width: 75%; max-width: 600px;">
             <span style="padding-right: 0.8em; display: flex; flex-direction: row; align-items: center">
                 $\tau\,\,$ <input type="range" id="slider_tau" min="1" max="30" step="0.5" />
+            </span>
+            <span>
+                <label>Tracer Style</label>
+                <select id="tracer_style">
+                    <option value="off">Off</option>
+                    <option value="dots" selected>Dots</option>
+                    <option value="lines">Lines</option>
+                </select>
             </span>
             <span>
                 <button id="reset_button" onclick="reset()">Reset</button>
@@ -31,7 +42,7 @@
         // see: https://users.rust-lang.org/t/error-importing-wasm-wasm-bindgen-for-web-error/83370/3
         //      https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html
         // import init, { D1Q3, wasm_memory } from "/wasm/lbm_1d/static/wasm_lbm.js";
-        import init, { D1Q3, wasm_memory } from "./static/wasm_lbm.js";
+        import init, { D1Q3, Tracers1D, wasm_memory } from "./static/wasm_lbm.js";
 
 
         await init();
@@ -39,6 +50,7 @@
         const ch = 500;
         const cw = 800;
         const nx = 2000;
+        const nt = 50;  // tracer count
 
         var temp = 1.00;
         var tau = 4;
@@ -49,9 +61,19 @@
         const vel_z = 0.0;
         const vel_s = 1e4 * 2; // 1 bp = 2 px
 
+        const steps_per_frame = 25;
+
         var lbm;
         var rho;
         var vel;
+
+        var tracer_style = "dots";
+
+        var tracers;
+        var pos;
+
+        var tracers_;
+        var pos_;
 
         async function run() {
 
@@ -59,6 +81,16 @@
 
             rho = new Float32Array(wasm_memory().buffer, lbm.rho_(), nx);
             vel = new Float32Array(wasm_memory().buffer, lbm.vel_(), nx);
+
+            tracers = Tracers1D.new(nt, nx, nx);
+            tracers.reset();
+
+            tracers_ = Tracers1D.new(nt, nx, nx);
+            tracers_.reset();
+
+            pos = new Float32Array(wasm_memory().buffer, tracers.pos_(), nt);
+            pos_ = new Float32Array(wasm_memory().buffer, tracers_.pos_(), nt);
+
 
             function add_gauss(arr, loc, std, scale) {
                 for (let i = 0; i < nx; i++) {
@@ -77,6 +109,38 @@
                 }
             }
 
+            function calc_cumrho_nx(rho_nx) {
+                let cumrho_nx = Array(nx);
+                let r = 0;
+                for (let i = 0; i < nx; i++) {
+                    cumrho_nx[i] = r;
+                    r += rho_nx[i]
+                }
+                return cumrho_nx;
+            }
+
+            function calc_cumrho_nt(pos_nt, cumrho_nx) {
+                let cumrho_nt = Array(nx);
+                for (let i = 0; i < nt; i++) {
+                    const j = Math.floor(pos_nt[i]); // our extent is just nx, it matches the count
+                    const f = pos_nt[i] - j;
+                    cumrho_nt[i] = cumrho_nx[j] * (1 - f) + cumrho_nx[(j + 1) % nx] * f;
+                }
+                return cumrho_nt
+            }
+
+            function reposition(pos_nt, cumrho_nt, cumrho_nx) {
+                for (let i = 0; i < nt; ++i) {
+                    for (let j = 1; j < nx; ++j) { // could do binary search here, it's sorted
+                        if (cumrho_nt[i] < cumrho_nx[j]) {
+                            const f = (cumrho_nt[i] - cumrho_nx[j - 1]) / (cumrho_nx[j] - cumrho_nx[j - 1]);
+                            pos_nt[i] = j - 1 + f;
+                            break;
+                        }
+                    }
+                }
+            }
+
             lbm.reinit(temp);
 
             const canvas = document.getElementById("canvas");
@@ -91,16 +155,19 @@
                 const canvasLeft = (event.clientX - boundingRect.left) * scaleX;
                 const canvasTop = (event.clientY - boundingRect.top) * scaleY;
 
-
                 const x = (canvasLeft / cw) * nx;
 
-                add_gauss(rho, x, 15, 0.1);
-                // add_gauss(vel, canvasLeft, 15, 0.1);
+                let cumrho_nx = calc_cumrho_nx(rho);
+                let cumrho_nt = calc_cumrho_nt(pos, cumrho_nx);
 
+                add_gauss(rho, x, 15, 0.1);
                 rescale(rho, 1.0);
+
                 lbm.reinit(temp);
 
-
+                // rescale tracer positions to maintain roughly equal spacing at rest
+                cumrho_nx = calc_cumrho_nx(rho);
+                reposition(pos, cumrho_nt, cumrho_nx);
             });
 
             canvas.height = ch;
@@ -111,7 +178,44 @@
             const vel_col = "#fba40a";
 
             const drawPlot = () => {
+
+                // --- Draw the current state.
+
                 ctx.clearRect(0, 0, cw, ch)
+
+                // draw axis line
+                ctx.beginPath();
+                ctx.moveTo(0, ch / 2);
+                ctx.lineTo(cw, ch / 2);
+                ctx.lineWidth = 0.5;
+                ctx.strokeStyle = "gray";
+                ctx.stroke();
+
+                // draw tracers
+                if (tracer_style != "off") {
+                    for (let i = 0; i < nt; i++) {
+                        const dx = (pos[i] - pos_[i]) % nx;
+                        const x = pos_[i] + 30 * dx; // exaggerate displacement
+                        const x_ = (nx + x) % nx;
+                        // const x_ = pos[i];
+                        const r = Math.floor((i / nt) * 255);
+                        const g = Math.floor((1.0 - (i / nt)) * 255);
+                        // const c = `rgb(${r} ${g} 0)`; // useful for debugging
+                        const c = "gray";
+                        ctx.beginPath();
+                        if (tracer_style == "dots") {
+                            ctx.fillStyle = c;
+                            ctx.arc(x_ * (cw / nx), ch / 2, 3, 0, 2.0 * Math.PI);
+                            ctx.fill();
+                        }
+                        if (tracer_style == "lines") {
+                            ctx.strokeStyle = c;
+                            ctx.moveTo(x_ * (cw / nx), 0);
+                            ctx.lineTo(x_ * (cw / nx), ch);
+                            ctx.stroke();
+                        }
+                    }
+                }
 
                 // draw density
                 ctx.beginPath();
@@ -135,22 +239,21 @@
                 ctx.lineWidth = 2;
                 ctx.stroke();
 
-                // draw axis line
-                ctx.beginPath();
-                ctx.moveTo(0, ch / 2);
-                ctx.lineTo(cw, ch / 2);
-                ctx.lineWidth = 0.5;
-                ctx.strokeStyle = "gray";
-                ctx.stroke();
+                // --- Update the simulation.
 
-                requestAnimationFrame(drawPlot);
-
-                for (let n = 0; n < 25; n++) {
+                for (let n = 0; n < steps_per_frame; n++) {
                     lbm.step(tau, temp);
                 }
+
+                tracers.interp_vel(lbm);
+                tracers.update(steps_per_frame);
+
+                // --- Trigger the next frame.
+
+                requestAnimationFrame(drawPlot);
             }
 
-            drawPlot();
+            requestAnimationFrame(drawPlot);
         }
 
         function reset() {
@@ -159,12 +262,18 @@
                 vel[i] = 0.0;
             }
             lbm.reinit();
+            tracers.reset();
+            tracers_.reset();
         }
 
         document.getElementById("reset_button").addEventListener("click", reset);
         document.getElementById("slider_tau").addEventListener("input", (event) => {
             tau = event.target.value;
         });
+
+        document.getElementById("tracer_style").addEventListener("input", (event) => {
+            tracer_style = event.target.value;
+        })
 
         run();
     </script>
