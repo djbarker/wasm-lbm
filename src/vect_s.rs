@@ -23,6 +23,28 @@ impl<T, const D: usize> VectS<T, D> {
         }
     }
 
+    pub fn map<S>(&self, func: impl Fn(T) -> S) -> VectS<S, D>
+    where
+        T: Copy,
+        S: Copy + 'static,
+    {
+        VectS {
+            data: self.data.map(func),
+        }
+    }
+
+    pub fn map_with_idx<S>(&self, func: impl Fn(usize, T) -> S) -> VectS<S, D>
+    where
+        T: Copy,
+        S: Copy + Default + 'static,
+    {
+        let mut out = VectS::new([S::default(); D]);
+        for i in 0..D {
+            out.data[i] = func(i, self.data[i]);
+        }
+        out
+    }
+
     pub fn sum(&self) -> T
     where
         T: Zero + Add<Output = T> + Copy,

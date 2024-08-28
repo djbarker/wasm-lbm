@@ -1,6 +1,6 @@
 mod utils;
 
-use std::ops::{Index, IndexMut};
+use std::ops::{Add, Index, IndexMut, Rem};
 
 use num_traits::{One, Zero};
 use wasm_bindgen::prelude::*;
@@ -17,6 +17,10 @@ struct VectD<T> {
 }
 
 impl<T> VectD<T> {
+    pub fn len(&self) -> isize {
+        self.data.len() as isize
+    }
+
     fn zeros(size: usize) -> VectD<T>
     where
         T: Zero + Copy,
@@ -162,12 +166,12 @@ fn calc_f_eq(rho: f32, vel: f32, w: VectS<f32, 3>, q: VectS<f32, 3>) -> VectS<f3
     return out;
 }
 
-fn sub_to_idx<const D: usize>(sub: VectS<usize, D>, counts: VectS<usize, D>) -> usize {
+fn sub_to_idx<const D: usize>(sub: VectS<isize, D>, counts: VectS<usize, D>) -> isize {
     let mut idx = 0;
     let mut stride = 1;
     for i in 0..D {
         idx += stride * sub[i];
-        stride *= counts[i];
+        stride *= counts[i] as isize;
     }
     idx
 }
@@ -179,9 +183,23 @@ fn split_int_frac(x: f32) -> (i32, f32) {
     (i as i32, f)
 }
 
+fn fmod<T>(x: T, m: T) -> T
+where
+    T: Rem<Output = T> + Add<Output = T> + Copy,
+{
+    (x + m) % m
+}
+
+fn vmod<const D: usize, T>(x: VectS<T, D>, m: VectS<T, D>) -> VectS<T, D>
+where
+    T: Rem<Output = T> + Add<Output = T> + Copy + Default + 'static,
+{
+    x.map_with_idx(|j, x| fmod(x, m[j]))
+}
+
 struct Tracers<const D: usize> {
-    pos: Vec<VectS<f32, D>>,
-    vel: Vec<VectS<f32, D>>,
+    pos: VectD<VectS<f32, D>>,
+    vel: VectD<VectS<f32, D>>,
     extent: VectS<f32, D>,
     counts: VectS<usize, D>,
 }
@@ -189,8 +207,8 @@ struct Tracers<const D: usize> {
 impl<const D: usize> Tracers<D> {
     pub fn new(size: usize, extent: VectS<f32, D>, counts: VectS<usize, D>) -> Self {
         return Self {
-            pos: vec![VectS::zero(); size],
-            vel: vec![VectS::zero(); size],
+            pos: VectD::zeros(size),
+            vel: VectD::zeros(size),
             extent: extent,
             counts: counts,
         };
@@ -199,7 +217,11 @@ impl<const D: usize> Tracers<D> {
     /// Update the positions
     pub fn update(&mut self, dt: f32) {
         for i in 0..self.pos.len() {
-            self.pos[i] = self.vel[i] * dt + self.pos[i];
+            self.pos[i] = self.pos[i] + self.vel[i] * dt;
+            self.pos[i] = vmod(self.pos[i], self.extent);
+            // for j in 0..D {
+            //     self.pos[i][j] = (self.pos[i][j] + self.extent[j]) % self.extent[j];
+            // }
         }
     }
 }
@@ -209,10 +231,11 @@ struct Tracers1D {
     delegate: Tracers<1>,
 }
 
+#[wasm_bindgen]
 impl Tracers1D {
-    pub fn new(size: usize, extent: VectS<f32, 1>, counts: VectS<usize, 1>) -> Self {
+    pub fn new(size: usize, extent: f32, count: usize) -> Self {
         return Self {
-            delegate: Tracers::<1>::new(size, extent, counts),
+            delegate: Tracers::<1>::new(size, VectS::new([extent]), VectS::new([count])),
         };
     }
 
@@ -225,17 +248,28 @@ impl Tracers1D {
     }
 
     // Linearly interpolate velocity for each tracer.
-    pub fn interp_vel(&mut self, vel: Vec<VectS<f32, 1>>) {
+    pub fn interp_vel(&mut self, lbm: &D1Q3) {
         let dx = self.delegate.extent[0] / (self.delegate.counts[0] as f32);
         for i in 0..self.delegate.vel.len() {
             let frac = self.delegate.pos[i] / self.delegate.extent;
-            let sub0 = (frac * (vel.len() as f32)).cast();
-            let sub1 = VectS::new([sub0[0] + 1]);
+            let sub0 = (frac * (lbm.nx as f32)).cast::<isize>();
+            let sub1 = sub0 + VectS::new([1]);
+            let sub1 = vmod(sub1, self.delegate.counts.cast());
             let idx0 = sub_to_idx(sub0, self.delegate.counts);
             let idx1 = sub_to_idx(sub1, self.delegate.counts);
             let frac = split_int_frac(self.delegate.pos[i][0] / dx).1;
-            self.delegate.vel[i] = vel[idx0] * (1.0 - frac) + vel[idx1] * frac;
+            self.delegate.vel[i] =
+                VectS::new([lbm.vel[idx0] * (1.0 - frac) + lbm.vel[idx1] * frac]);
         }
+    }
+
+    pub fn update(&mut self, dt: f32) {
+        self.delegate.update(dt)
+    }
+
+    /// Expose the 1D position array to JS
+    pub fn pos_(&mut self) -> *mut f32 {
+        self.delegate.pos.data.as_mut_ptr() as *mut f32
     }
 }
 
