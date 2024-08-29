@@ -3,7 +3,7 @@ use std::ops::{Add, Div, Index, IndexMut, Mul, Sub};
 use num_traits::{AsPrimitive, One, Zero};
 
 // S => "static" vector, i.e. size known at compile time
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VectS<T, const D: usize> {
     data: [T; D],
 }
@@ -89,6 +89,17 @@ impl<T, const D: usize> VectS<T, D> {
             out[i] = out[i - 1] + self[i];
         }
         out
+    }
+}
+
+impl<T, const D: usize> Default for VectS<T, D>
+where
+    T: Zero + Copy,
+{
+    fn default() -> Self {
+        Self {
+            data: [T::zero(); D],
+        }
     }
 }
 
@@ -215,5 +226,23 @@ where
         Self {
             data: self.data.map(|x| x / rhs),
         }
+    }
+}
+
+/// impl for concrete f32 rather than T, since rust does not allow the generic one :(
+impl<const D: usize> Mul<VectS<f32, D>> for f32 {
+    type Output = VectS<f32, D>;
+
+    fn mul(self, rhs: VectS<f32, D>) -> Self::Output {
+        rhs * self
+    }
+}
+
+/// impl for concrete f32 rather than T, since rust does not allow the generic one :(
+impl<const D: usize> Div<VectS<f32, D>> for f32 {
+    type Output = VectS<f32, D>;
+
+    fn div(self, rhs: VectS<f32, D>) -> Self::Output {
+        rhs / self
     }
 }
