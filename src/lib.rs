@@ -117,39 +117,29 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
         }
     }
 
-    pub fn stream(&mut self) {
+    pub fn step(&mut self, tau: f32) {
         let mut sub = VectS::zero();
         for i in 0..self.cnt.prod() {
+            // stream
             for q in 0..Q {
-                let sub_ = sub + self.qs[q].cast();
+                let sub_ = sub - self.qs[q].cast();
                 let sub_ = vmod(sub_, self.cnt);
                 let j = sub_to_idx(sub_, self.cnt);
-                self.f2[j][q] = self.f1[i][q];
+                self.f2[i][q] = self.f1[j][q];
             }
+
+            // macro
+            self.rho[i] = self.f2[i].sum();
+            self.vel[i] = self.f2[i].map_with_idx(|i, f| f * self.qs[i]).sum() / self.rho[i];
+
+            // collide
+            let f_eq = calc_f_eq(self.rho[i], self.vel[i], self.ws, self.qs);
+            self.f2[i] = self.f2[i] - (self.f2[i] - f_eq) * (1.0 / tau);
+
             sub = raster(sub, self.cnt);
         }
 
         std::mem::swap(&mut self.f1, &mut self.f2);
-    }
-
-    pub fn macro_(&mut self) {
-        for i in 0..self.cnt.prod() {
-            self.rho[i] = self.f1[i].sum();
-            self.vel[i] = self.f1[i].map_with_idx(|i, f| f * self.qs[i]).sum() / self.rho[i];
-        }
-    }
-
-    pub fn collide(&mut self, tau: f32) {
-        for i in 0..self.cnt.prod() {
-            let f_eq = calc_f_eq(self.rho[i], self.vel[i], self.ws, self.qs);
-            self.f1[i] = self.f1[i] - (self.f1[i] - f_eq) * (1.0 / tau);
-        }
-    }
-
-    pub fn step(&mut self, tau: f32) {
-        self.stream();
-        self.macro_();
-        self.collide(tau);
     }
 }
 
@@ -173,6 +163,123 @@ impl D1Q3 {
     // as set by the macroscopic quantities.
     pub fn reinit(&mut self) {
         self.lbm.reinit()
+    }
+
+    pub fn step_n(&mut self, tau: f32, n: usize) {
+        for _ in 0..n {
+            self.step(tau);
+        }
+    }
+
+    pub fn step(&mut self, tau: f32) {
+        self.lbm.step(tau)
+    }
+
+    pub fn rho_(&mut self) -> *mut f32 {
+        self.lbm.rho.data.as_mut_ptr()
+    }
+
+    pub fn vel_(&mut self) -> *mut f32 {
+        self.lbm.vel.data.as_mut_ptr() as *mut f32
+    }
+}
+
+/// Take the tensor product of two velocity sets.
+///
+/// #### NOTE
+///
+/// In Rust we cannot use expressions of const generics as const generic args themselves.
+/// Thus it is necessary to have the output D & Q explicitly as arguments.
+/// However, we usually don't need to specify the generic arguments because the type inference
+/// works it out for us.
+/// Annoyingly, if your upstream use has the wrong D & Q values this will compile,
+/// but you will at least get a runtime assertion error.
+fn tensor_prod_q<
+    const D1: usize,
+    const Q1: usize,
+    const D2: usize,
+    const Q2: usize,
+    const D3: usize,
+    const Q3: usize,
+>(
+    q1s: [VectS<f32, D1>; Q1],
+    q2s: [VectS<f32, D2>; Q2],
+) -> [VectS<f32, D3>; Q3] {
+    // can't use const expressions as generic const args
+    assert_eq!(D1 + D2, D3);
+    assert_eq!(Q1 * Q2, Q3);
+    let mut out = [VectS::zero(); Q3];
+    let mut i = 0;
+    for q1 in 0..Q1 {
+        for q2 in 0..Q2 {
+            for d in 0..D1 {
+                out[i][d] = q1s[q1][d];
+            }
+            for d in 0..D2 {
+                out[i][D1 + d] = q2s[q2][d];
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Take the tensor product of two weight sets.
+///
+/// #### NOTE
+///
+/// See the note on `tensor_prod_q` about generic const arguments.
+fn tensor_prod_w<const Q1: usize, const Q2: usize, const Q3: usize>(
+    w1s: [f32; Q1],
+    w2s: [f32; Q2],
+) -> [f32; Q3] {
+    // can't use const expressions as generic const args
+    assert_eq!(Q1 * Q2, Q3);
+    let mut out = [0.0; Q3];
+    let mut sum = 0.0;
+    let mut i = 0;
+    for q1 in 0..Q1 {
+        for q2 in 0..Q2 {
+            out[i] = w1s[q1] * w2s[q2];
+            sum += out[i];
+            i += 1;
+        }
+    }
+    // renormalize
+    for i in 0..Q3 {
+        out[i] /= sum;
+    }
+    out
+}
+
+#[wasm_bindgen]
+struct D2Q9 {
+    lbm: LBM<2, 9>,
+}
+
+#[wasm_bindgen]
+impl D2Q9 {
+    pub fn new(nx: usize, ny: usize) -> D2Q9 {
+        // Unfortunately we cannot call tensor_prod_* in a static context.
+        // So we cannot have D2Q9_* static variables a la D1Q3_*.
+        let d2q9_q = tensor_prod_q(D1Q3_Q, D1Q3_Q);
+        let d2q9_w = tensor_prod_w(D1Q3_W, D1Q3_W);
+
+        D2Q9 {
+            lbm: LBM::new(VectS::new([nx, ny]), d2q9_w, d2q9_q),
+        }
+    }
+
+    // Re-initialize the distribution function to the local equilibrium
+    // as set by the macroscopic quantities.
+    pub fn reinit(&mut self) {
+        self.lbm.reinit()
+    }
+
+    pub fn step_n(&mut self, tau: f32, n: usize) {
+        for _ in 0..n {
+            self.step(tau);
+        }
     }
 
     pub fn step(&mut self, tau: f32) {
