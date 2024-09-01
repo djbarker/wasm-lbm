@@ -28,3 +28,4 @@ wasm-bindgen-test = "0.3.34"
 # opt-level = "s"
 opt-level = 3
 overflow-checks = false
+target-feature="+simd128"
