@@ -18,7 +18,16 @@
         <div
             style="display: flex; flex-direction: row; align-items: center; justify-content: space-around; width: 75%; max-width: 600px;">
             <span style="padding-right: 0.8em; display: flex; flex-direction: row; align-items: center">
-                $\tau\,\,$ <input type="range" id="slider_tau" min="0.6" max="5" step="0.1" />
+                <label style="padding-right: 0.4em;">&#120591</label><input type="range" id="slider_tau" min="0.55"
+                    max="1.5" step="0.05" value="0.55" />
+            </span>
+            <span>
+                <label>Display</label>
+                <select id="plot_vals">
+                    <option value="velocity">Velocity</option>
+                    <option value="density">Density</option>
+                    <option value="curl" selected>Vorticity</option>
+                </select>
             </span>
             <span>
                 <button id="reset_button" onclick="reset()">Reset</button>
@@ -36,19 +45,105 @@
 
         const ch = 500;
         const cw = 500;
-        const nx = 120;
+        const nx = 150;
         const ny = nx;
 
         var temp = 1.00;
-        var tau = 1;
+        var tau = 0.53;
 
         const steps_per_frame = 15;
 
         var lbm;
         var rho;
         var vel;
+        var curl;
 
+        var plot_vals = "curl"
         var prev_time = 0;
+
+        var img_buff = new Uint8ClampedArray(nx * ny * 4);
+        for (let i = 0; i < nx * nx * 4; i++) {
+            img_buff[i] = 255;
+        }
+
+        class ColourMap {
+            constructor(c_arr, x_arr) {
+                this.c_arr = c_arr;
+                this.x_arr = x_arr;
+                console.assert(c_arr.length == x_arr.length);
+            }
+
+            rgb(x) {
+
+                x = Math.min(Math.max(x, 0), 1);
+
+                if (x >= this.x_arr[this.x_arr.length - 1]) {
+                    return this.c_arr[this.c_arr.length - 1];
+                }
+
+                if (x <= this.x_arr[0]) {
+                    return this.c_arr[0]
+                }
+
+                // TODO: Check if binary search is worth it here; n is quite small so it may not be
+                let i = 0
+                while (i < this.x_arr.length - 1) {
+                    if (this.x_arr[i] >= x) {
+                        break;
+                    }
+                    i++;
+                }
+
+                // return this.c_arr[i];
+
+                const j = Math.max(i - 1, 0);
+
+                let f = (x - this.x_arr[j]) / (this.x_arr[i] - this.x_arr[j]);
+                f = Math.min(Math.max(f, 0), 1)
+
+                let out = [0, 0, 0];
+
+                for (let k = 0; k < 3; ++k) {
+                    out[k] = (1 - f) * this.c_arr[j][k] + f * this.c_arr[i][k];
+                }
+
+                return out;
+            }
+        }
+
+        const viridis = new ColourMap(
+            [
+                [0.267004, 0.004874, 0.329415],
+                [0.282623, 0.140926, 0.457517],
+                [0.253935, 0.265254, 0.529983],
+                [0.206756, 0.371758, 0.553117],
+                [0.163625, 0.471133, 0.558148],
+                [0.127568, 0.566949, 0.550556],
+                [0.134692, 0.658636, 0.517649],
+                [0.266941, 0.748751, 0.440573],
+                [0.477504, 0.821444, 0.318195],
+                [0.741388, 0.873449, 0.149561],
+                [0.993248, 0.906157, 0.143936],
+            ],
+            [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        );
+
+        const inferno = new ColourMap(
+            [
+                [1.46200e-03, 4.66000e-04, 1.38660e-02],
+                [8.74110e-02, 4.45560e-02, 2.24813e-01],
+                [2.58234e-01, 3.85710e-02, 4.06485e-01],
+                [4.16331e-01, 9.02030e-02, 4.32943e-01],
+                [5.78304e-01, 1.48039e-01, 4.04411e-01],
+                [7.35683e-01, 2.15906e-01, 3.30245e-01],
+                [8.65006e-01, 3.16822e-01, 2.26055e-01],
+                [9.54506e-01, 4.68744e-01, 9.98740e-02],
+                [9.87622e-01, 6.45320e-01, 3.98860e-02],
+                [9.64394e-01, 8.43848e-01, 2.73391e-01],
+                [9.88362e-01, 9.98364e-01, 6.44924e-01],
+            ],
+            [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        )
 
         function vmag(x, y) {
             return Math.sqrt(x * x + y * y);
@@ -72,6 +167,7 @@
 
             rho = new Float32Array(wasm_memory().buffer, lbm.rho_(), nx * ny);
             vel = new Float32Array(wasm_memory().buffer, lbm.vel_(), nx * ny * 2);
+            curl = new Float32Array(wasm_memory().buffer, lbm.curl_(), nx * ny);
 
             function add_gauss_rho(arr, xloc, yloc, std, scale) {
                 for (let i = 0; i < nx; i++) {
@@ -104,6 +200,33 @@
                 for (let i = 0; i < nx; i++) {
                     arr[i] *= (avg_val / sum);
                 }
+            }
+
+            function hsl_to_rgb(h, s, l) {
+                h /= 360;
+
+                var r, g, b;
+
+                if (s == 0) {
+                    r = g = b = l; // achromatic
+                } else {
+                    var hue2rgb = function hue2rgb(p, q, t) {
+                        if (t < 0) t += 1;
+                        if (t > 1) t -= 1;
+                        if (t < 1 / 6) return p + (q - p) * 6 * t;
+                        if (t < 1 / 2) return q;
+                        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+                        return p;
+                    }
+
+                    var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                    var p = 2 * l - q;
+                    r = hue2rgb(p, q, h + 1 / 3);
+                    g = hue2rgb(p, q, h);
+                    b = hue2rgb(p, q, h - 1 / 3);
+                }
+
+                return [r, g, b];
             }
 
             lbm.reinit(temp);
@@ -170,41 +293,66 @@
                 const dy = ch / ny;
 
                 const vm = 0.05;
+                const dr = 0.05;
+                const dc = 0.012;
 
                 for (let i = 0; i < nx; i++) {
                     for (let j = 0; j < ny; j++) {
-                        ctx.beginPath();
+
                         const idx = i + j * nx;
-                        const vx = vel[0 + 2 * idx];
-                        const vy = vel[1 + 2 * idx];
-                        const v2 = vmag(vx, vy);
-                        // const f = (rho[idx] - 0.99) / 0.02; // TODO: clamp (0, 1)
 
-                        // const fx = (vel[0 + 2 * idx] / vm + 1) / 2;
-                        // const fy = (vel[1 + 2 * idx] / vm + 1) / 2;
-                        // const r = Math.floor(255 * fx);
-                        // const b = Math.floor(255 * fy);
-                        // const g = 0;
-                        // ctx.fillStyle = `rgb(${r} ${g} ${b})`
+                        let [r, g, b] = [0, 0, 0];
 
-                        const theta = Math.atan2(vy, vx);
-                        const h = Math.floor(360 * theta / (2 * Math.PI));
-                        const s = Math.floor(100 * Math.min(v2 / vm, 1.0));
-                        const l = Math.floor(60 - 10 * (s / 100));
-                        ctx.fillStyle = `hsl(${h}deg ${s}% ${l}%)`
+                        if (plot_vals == "velocity") {
+                            const vx = vel[0 + 2 * idx];
+                            const vy = vel[1 + 2 * idx];
+                            const v2 = vmag(vx, vy);
+                            const theta = Math.atan2(vy, vx);
+                            const h = 360 * theta / (2 * Math.PI);
+                            const s = Math.max(Math.min(v2 / vm, 1.0), 0.0);
+                            const l = 0.6 - 0.1 * s;
 
-                        ctx.fillRect(
-                            Math.floor(i * dx),
-                            Math.floor(j * dy),
-                            Math.ceil(dx),
-                            Math.ceil(dy),
-                        );
+                            [r, g, b] = hsl_to_rgb(h, s, l);
+                        }
+                        else if (plot_vals == "density") {
+                            let f = ((rho[idx] - 1.0) + dr) / (2 * dr);
+                            f = Math.min(Math.max(f, 0.0), 1.0);
+                            // r = f;
+                            [r, g, b] = viridis.rgb(f);
+
+
+                            if (i == 50 && j == 50) {
+                                // console.log(r, g, b, rho[idx], f);
+                            }
+                        }
+                        else if (plot_vals == "curl") {
+                            let f = ((curl[idx] - 0.0) + dc) / (2 * dc);
+                            f = Math.min(Math.max(f, 0.0), 1.0);
+                            [r, g, b] = inferno.rgb(f);
+                        }
+
+                        img_buff[0 + 4 * idx] = Math.floor(r * 255);
+                        img_buff[1 + 4 * idx] = Math.floor(g * 255);
+                        img_buff[2 + 4 * idx] = Math.floor(b * 255);
                     }
                 }
+
+                const img_data = ctx.createImageData(nx, ny);
+                img_data.data.set(img_buff);
+
+                // ctx.putImageData(img_data, 0, 0);
+
+
+                createImageBitmap(img_data).then(
+                    (img_bitmap) => {
+                        ctx.drawImage(img_bitmap, 0, 0, cw, ch);
+                    }
+                );
 
                 // --- Update the simulation.
 
                 lbm.step_n(tau, steps_per_frame);
+                lbm.calc_curl();
 
                 // --- Trigger the next frame.
 
@@ -227,9 +375,15 @@
         }
 
         document.getElementById("reset_button").addEventListener("click", reset);
+
         document.getElementById("slider_tau").addEventListener("input", (event) => {
             tau = event.target.value;
         });
+
+        document.getElementById("plot_vals").addEventListener("input", (event) => {
+            plot_vals = event.target.value;
+            console.log(plot_vals)
+        })
 
         run();
     </script>

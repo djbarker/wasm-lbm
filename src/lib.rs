@@ -80,6 +80,7 @@ fn calc_f_eq<const D: usize, const Q: usize>(
     return out;
 }
 
+/// Container for the LBM simulation data which is generic in the dimension and velocity set size.
 struct LBM<const D: usize, const Q: usize> {
     ws: [f32; Q],
     qs: [VectS<f32, D>; Q],
@@ -117,6 +118,7 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
         }
     }
 
+    /// Basic implementation of one iteration of the LBM method.
     pub fn step(&mut self, tau: f32) {
         let mut sub = VectS::zero();
         for i in 0..self.cnt.prod() {
@@ -255,6 +257,7 @@ fn tensor_prod_w<const Q1: usize, const Q2: usize, const Q3: usize>(
 #[wasm_bindgen]
 struct D2Q9 {
     lbm: LBM<2, 9>,
+    curl: VectD<f32>,
 }
 
 #[wasm_bindgen]
@@ -267,6 +270,7 @@ impl D2Q9 {
 
         D2Q9 {
             lbm: LBM::new(VectS::new([nx, ny]), d2q9_w, d2q9_q),
+            curl: VectD::zeros(nx * ny),
         }
     }
 
@@ -286,12 +290,35 @@ impl D2Q9 {
         self.lbm.step(tau)
     }
 
+    pub fn calc_curl(&mut self) {
+        let nx = self.lbm.cnt[0];
+        let ny = self.lbm.cnt[1];
+        for i in 0..nx {
+            for j in 0..ny {
+                let idx = i + j * nx;
+                let idx_xp = fmod(i + 1, nx) + j * nx;
+                let idx_xn = fmod(i - 1, nx) + j * nx;
+                let idx_yp = i + fmod(j + 1, ny) * nx;
+                let idx_yn = i + fmod(j - 1, ny) * nx;
+
+                let dvy_dx = (self.lbm.vel[idx_xp][1] - self.lbm.vel[idx_xn][1]) / 2.0;
+                let dvx_dy = (self.lbm.vel[idx_yp][0] - self.lbm.vel[idx_yn][0]) / 2.0;
+
+                self.curl[idx] = dvy_dx - dvx_dy;
+            }
+        }
+    }
+
     pub fn rho_(&mut self) -> *mut f32 {
         self.lbm.rho.data.as_mut_ptr()
     }
 
     pub fn vel_(&mut self) -> *mut f32 {
         self.lbm.vel.data.as_mut_ptr() as *mut f32
+    }
+
+    pub fn curl_(&mut self) -> *mut f32 {
+        self.curl.data.as_mut_ptr()
     }
 }
 
