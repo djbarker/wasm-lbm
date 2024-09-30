@@ -302,14 +302,18 @@
             canvas.height = ch;
             canvas.width = cw;
 
-            let dt_sec_ema = 0.0;
-            const alpha = 0.3;
+            let dt_sec_ema = -1.0;
+            const alpha = 0.025;
 
             const drawPlot = (time) => {
 
                 const dt_ms = time - prev_time;
-                const dt_sec = (dt_ms / 1000.0);
-                dt_sec_ema = dt_sec * alpha + dt_sec_ema * (1 - alpha);
+                const dt_sec = Math.min((dt_ms / 1000.0), 5);
+                if (dt_sec_ema > 0) {
+                    dt_sec_ema = dt_sec * alpha + dt_sec_ema * (1 - alpha);
+                } else {
+                    dt_sec_ema = dt_sec;
+                }
                 const fps = Math.floor(1 / dt_sec_ema);
                 prev_time = time;
 
