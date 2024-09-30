@@ -68,6 +68,7 @@ where
 
 /// Calculate the approximate equilibrium distribution for the given density,
 /// velocity & lattice weight/velocity set.
+#[rustfmt::skip]
 fn calc_f_eq<const D: usize, const Q: usize>(
     rho: f32,
     vel: VectS<f32, D>,
@@ -75,12 +76,78 @@ fn calc_f_eq<const D: usize, const Q: usize>(
     qs: [VectS<f32, D>; Q],
 ) -> VectS<f32, Q> {
     let vv = (vel * vel).sum();
-    let mut out = ws;
-    for i in 0..Q {
-        let vq = (vel * qs[i]).sum();
-        out[i] *= rho * (1.0 + 3.0 * vq - (3.0 / 2.0) * vv + 4.5 * vq * vq);
+    
+    if (D == 2) && (Q == 9) {
+        // Explicitly write out D2Q9 feq calculation
+        
+        let v = vel;
+        let mut out = VectS::zero();
+    
+        let vxx = v[0] * v[0];
+        let vyy = v[1] * v[1];
+        let vxy = v[0] * v[1];
+
+        // 0:        1:       2:       3:       4:      5:      6:       7:      8:
+        // [-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 0], [0, 1], [1, -1], [1, 0], [1, 1]
+        out[4] = rho * (2.0 / 9.0)  * (2.0 - 3.0 * vv);
+        out[7] = rho * (1.0 / 18.0) * (2.0 + 6.0 * v[0] + 9.0 * vxx - 3.0 * vv);
+        out[1] = rho * (1.0 / 18.0) * (2.0 - 6.0 * v[0] + 9.0 * vxx - 3.0 * vv);
+        out[5] = rho * (1.0 / 18.0) * (2.0 + 6.0 * v[1] + 9.0 * vyy - 3.0 * vv);
+        out[3] = rho * (1.0 / 18.0) * (2.0 - 6.0 * v[1] + 9.0 * vyy - 3.0 * vv);
+        out[8] = rho * (1.0 / 36.0) * (1.0 + 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv);
+        out[0] = rho * (1.0 / 36.0) * (1.0 - 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv);
+        out[2] = rho * (1.0 / 36.0) * (1.0 + 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv);
+        out[6] = rho * (1.0 / 36.0) * (1.0 - 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv);
+        
+        out
+    } else {
+        let mut out = ws;
+        for i in 0..Q {
+            let vq = (vel * qs[i]).sum();
+            out[i] *= rho * (1.0 + 3.0 * vq - 1.5 * vv + 4.5 * vq * vq);
+        }
+        out
     }
-    return out;
+}
+
+#[rustfmt::skip]
+fn collide<const D: usize, const Q: usize>(
+    f: &mut VectS<f32, Q>,
+    omega: f32,
+    rho: f32,
+    vel: VectS<f32, D>,
+    ws: VectS<f32, Q>,
+    qs: [VectS<f32, D>; Q],
+) {
+    let vv = (vel * vel).sum();
+
+    if (D == 2) && (Q == 9) {
+        // Explicitly write out D2Q9 feq calculation
+
+        let v = vel; 
+        let vxx = v[0] * v[0];
+        let vyy = v[1] * v[1];
+        let vxy = v[0] * v[1];
+
+        // 0:        1:       2:       3:       4:      5:      6:       7:      8:
+        // [-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 0], [0, 1], [1, -1], [1, 0], [1, 1]
+        f[4] -= omega * (f[4] - rho * (2.0 / 9.0) * (2.0 - 3.0 * vv));
+        f[7] -= omega * (f[7] - rho * (1.0 / 18.0) * (2.0 + 6.0 * v[0] + 9.0 * vxx - 3.0 * vv));
+        f[1] -= omega * (f[1] - rho * (1.0 / 18.0) * (2.0 - 6.0 * v[0] + 9.0 * vxx - 3.0 * vv));
+        f[5] -= omega * (f[5] - rho * (1.0 / 18.0) * (2.0 + 6.0 * v[1] + 9.0 * vyy - 3.0 * vv));
+        f[3] -= omega * (f[3] - rho * (1.0 / 18.0) * (2.0 - 6.0 * v[1] + 9.0 * vyy - 3.0 * vv));
+        f[8] -= omega * (f[8] - rho * (1.0 / 36.0) * (1.0 + 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv));
+        f[0] -= omega * (f[0] - rho * (1.0 / 36.0) * (1.0 - 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv));
+        f[2] -= omega * (f[2] - rho * (1.0 / 36.0) * (1.0 + 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv));
+        f[6] -= omega * (f[6] - rho * (1.0 / 36.0) * (1.0 - 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv));
+    } else {
+        let f_eq = calc_f_eq(rho, vel, ws, qs);
+
+        // loop-fusion (avoids temporaries and multiple loops over Q)
+        for q in 0..Q {
+            f[q] -= (f[q] - f_eq[q]) * omega;
+        }
+    }
 }
 
 /// Container for the LBM simulation data which is generic in the dimension and velocity set size.
@@ -147,15 +214,12 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
         //       This way we read from f1 in contiguously, which seems to be marginally better than
         //       writing to f2 contiguously.
 
-        let mut sub = VectS::zero();
         for i in 0..self.cnt.prod() {
             // stream
             for q in 0..Q {
                 let j = self.idx[i][q];
                 self.f2[j][q] = self.f1[i][q];
             }
-
-            sub = raster(sub, self.cnt);
         }
 
         let omega = 1.0 / tau;
@@ -165,13 +229,14 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
             self.rho[i] = self.f2[i].sum();
             self.vel[i] = self.f2[i].map_with_idx(|i, f| f * self.qs[i]).sum() / self.rho[i];
 
-            // collide
-            let f_eq = calc_f_eq(self.rho[i], self.vel[i], self.ws, self.qs);
-
-            // loop-fusion
-            for q in 0..Q {
-                self.f2[i][q] -= (self.f2[i][q] - f_eq[q]) * omega;
-            }
+            collide(
+                &mut self.f2[i],
+                omega,
+                self.rho[i],
+                self.vel[i],
+                self.ws,
+                self.qs,
+            );
         }
 
         std::mem::swap(&mut self.f1, &mut self.f2);
