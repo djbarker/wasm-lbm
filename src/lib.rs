@@ -27,6 +27,9 @@ fn raster<const D: usize>(mut sub: VectS<isize, D>, counts: VectS<isize, D>) -> 
         if sub[d] == counts[d] {
             sub[d] = 0;
             sub[d + 1] += 1;
+        } else {
+            // If we did not hit the end no need to check others since they won't have been bumped.
+            break;
         }
     }
     // if sub[D - 1] == counts[D - 1] {
@@ -68,24 +71,27 @@ where
 fn calc_f_eq<const D: usize, const Q: usize>(
     rho: f32,
     vel: VectS<f32, D>,
-    ws: [f32; Q],
+    ws: VectS<f32, Q>,
     qs: [VectS<f32, D>; Q],
 ) -> VectS<f32, Q> {
     let vv = (vel * vel).sum();
-    let mut out = VectS::zero();
+    let mut out = ws;
     for i in 0..Q {
         let vq = (vel * qs[i]).sum();
-        out[i] = ws[i] * rho * (1.0 + 3.0 * vq - (3.0 / 2.0) * vv + 4.5 * vq * vq);
+        out[i] *= rho * (1.0 + 3.0 * vq - (3.0 / 2.0) * vv + 4.5 * vq * vq);
     }
     return out;
 }
 
 /// Container for the LBM simulation data which is generic in the dimension and velocity set size.
 struct LBM<const D: usize, const Q: usize> {
-    ws: [f32; Q],
+    ws: VectS<f32, Q>,
     qs: [VectS<f32, D>; Q],
 
     cnt: VectS<isize, D>,
+
+    // downstream indices for each cell
+    idx: VectD<VectS<isize, Q>>,
 
     f1: VectD<VectS<f32, Q>>,
     f2: VectD<VectS<f32, Q>>,
@@ -96,11 +102,28 @@ struct LBM<const D: usize, const Q: usize> {
 
 impl<const D: usize, const Q: usize> LBM<D, Q> {
     pub fn new(cnt: VectS<usize, D>, ws: [f32; Q], qs: [VectS<f32, D>; Q]) -> LBM<D, Q> {
-        let n = cnt.prod();
+        let cnt: VectS<isize, D> = cnt.cast();
+        let n = cnt.prod() as usize;
+
+        // initialize offset vectors
+        let mut idx: VectD<VectS<isize, Q>> = VectD::zeros(n);
+        let mut sub = VectS::zero();
+        for i in 0..(n as isize) {
+            for q in 0..Q {
+                let sub_ = sub + qs[q].cast();
+                let sub_ = vmod(sub_, cnt);
+                let j = sub_to_idx(sub_, cnt);
+                idx[i][q] = j;
+            }
+
+            sub = raster(sub, cnt);
+        }
+
         let mut out = LBM {
-            ws: ws,
+            ws: VectS::new(ws),
             qs: qs,
-            cnt: cnt.cast(),
+            cnt: cnt,
+            idx: idx,
             f1: VectD::zeros(n),
             f2: VectD::zeros(n),
             rho: VectD::ones(n),
@@ -120,25 +143,35 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
 
     /// Basic implementation of one iteration of the LBM method.
     pub fn step(&mut self, tau: f32) {
+        // NOTE: Combing the loops below is not optimal.
+        //       This way we read from f1 in contiguously, which seems to be marginally better than
+        //       writing to f2 contiguously.
+
         let mut sub = VectS::zero();
         for i in 0..self.cnt.prod() {
             // stream
             for q in 0..Q {
-                let sub_ = sub - self.qs[q].cast();
-                let sub_ = vmod(sub_, self.cnt);
-                let j = sub_to_idx(sub_, self.cnt);
-                self.f2[i][q] = self.f1[j][q];
+                let j = self.idx[i][q];
+                self.f2[j][q] = self.f1[i][q];
             }
 
+            sub = raster(sub, self.cnt);
+        }
+
+        let omega = 1.0 / tau;
+
+        for i in 0..self.cnt.prod() {
             // macro
             self.rho[i] = self.f2[i].sum();
             self.vel[i] = self.f2[i].map_with_idx(|i, f| f * self.qs[i]).sum() / self.rho[i];
 
             // collide
             let f_eq = calc_f_eq(self.rho[i], self.vel[i], self.ws, self.qs);
-            self.f2[i] = self.f2[i] - (self.f2[i] - f_eq) * (1.0 / tau);
 
-            sub = raster(sub, self.cnt);
+            // loop-fusion
+            for q in 0..Q {
+                self.f2[i][q] -= (self.f2[i][q] - f_eq[q]) * omega;
+            }
         }
 
         std::mem::swap(&mut self.f1, &mut self.f2);
