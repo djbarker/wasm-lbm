@@ -1,4 +1,4 @@
-use std::ops::{Add, Div, Index, IndexMut, Mul, Sub};
+use std::ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign};
 
 use num_traits::{AsPrimitive, One, Zero};
 
@@ -133,13 +133,13 @@ impl<T, const D: usize> Index<usize> for VectS<T, D> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
-        return &self.data[index];
+        return unsafe { &self.data.get_unchecked(index) };
     }
 }
 
 impl<T, const D: usize> IndexMut<usize> for VectS<T, D> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        return &mut self.data[index];
+        return unsafe { self.data.get_unchecked_mut(index) };
     }
 }
 
@@ -244,5 +244,49 @@ impl<const D: usize> Div<VectS<f32, D>> for f32 {
 
     fn div(self, rhs: VectS<f32, D>) -> Self::Output {
         rhs / self
+    }
+}
+
+impl<T, const D: usize> AddAssign for VectS<T, D>
+where
+    T: Copy + AddAssign,
+{
+    fn add_assign(&mut self, rhs: Self) {
+        for d in 0..D {
+            self[d] += rhs[d];
+        }
+    }
+}
+
+impl<T, const D: usize> SubAssign for VectS<T, D>
+where
+    T: Copy + SubAssign,
+{
+    fn sub_assign(&mut self, rhs: Self) {
+        for d in 0..D {
+            self[d] -= rhs[d];
+        }
+    }
+}
+
+impl<T, const D: usize> MulAssign for VectS<T, D>
+where
+    T: Copy + MulAssign,
+{
+    fn mul_assign(&mut self, rhs: Self) {
+        for d in 0..D {
+            self[d] *= rhs[d];
+        }
+    }
+}
+
+impl<T, const D: usize> DivAssign for VectS<T, D>
+where
+    T: Copy + DivAssign,
+{
+    fn div_assign(&mut self, rhs: Self) {
+        for d in 0..D {
+            self[d] /= rhs[d];
+        }
     }
 }

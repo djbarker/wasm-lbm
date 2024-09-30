@@ -49,7 +49,7 @@ impl<T> Index<isize> for VectD<T> {
             self.data.len() as isize + index
         };
 
-        return &self.data[index as usize];
+        return unsafe { &self.data.get_unchecked(index as usize) };
     }
 }
 
@@ -61,6 +61,6 @@ impl<T> IndexMut<isize> for VectD<T> {
             self.data.len() as isize + index
         };
 
-        return &mut self.data[index as usize];
+        return unsafe { self.data.get_unchecked_mut(index as usize) };
     }
 }
