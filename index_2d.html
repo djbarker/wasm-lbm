@@ -8,10 +8,13 @@
 
 <body>
 
-    <canvas id="canvas" style="max-width: 100%;">
-    </canvas>
+    <span style="display: flex; flex-direction: row; justify-content: space-around; padding-bottom: 0.5em;">
+        <span>
+            <canvas id="canvas" style="max-width: 100%; touch-action: none;"></canvas>
+            <div id="fps" style="font-family: monospace">0 fps</div>
+        </span>
+    </span>
 
-    <div id="fps" style="font-family: monospace">0 fps</div>
 
     <div
         style="font-family: monospace; display: flex; justify-content: space-around; flex-direction: column; align-items: center;">
@@ -38,7 +41,7 @@
     <script type="module">
         // see: https://users.rust-lang.org/t/error-importing-wasm-wasm-bindgen-for-web-error/83370/3
         //      https://rustwasm.github.io/docs/wasm-bindgen/examples/without-a-bundler.html
-        // import init, { D1Q3, wasm_memory } from "/wasm/lbm_1d/static/wasm_lbm.js";
+        // import init, { D2Q9, wasm_memory } from "/wasm/lbm/static/wasm_lbm.js";
         import init, { D2Q9, wasm_memory } from "./static/wasm_lbm.js";
 
         await init();
@@ -252,8 +255,17 @@
                 lbm.reinit(temp);
             });
 
+            let prevX = null;
+            let prevY = null;
+
             canvas.addEventListener("mousemove", event => {
                 const boundingRect = canvas.getBoundingClientRect();
+
+                if (prevX == null) {
+                    prevX = event.clientX;
+                    prevY = event.clientY;
+                    return;
+                }
 
                 const scaleX = canvas.width / boundingRect.width;
                 const scaleY = canvas.height / boundingRect.height;
@@ -264,23 +276,41 @@
                 const x = (canvasLeft / cw) * nx;
                 const y = (canvasTop / ch) * ny;
 
-                let vx = event.movementX * scaleX;
-                let vy = event.movementY * scaleY;
+                let vx = (event.clientX - prevX) * scaleX;
+                let vy = (event.clientY - prevY) * scaleY;
 
                 const [vx_, vy_] = vclip(vx, vy, 25.0);
 
                 add_gauss_vel(vel, x, y, vx_, vy_, 3, 0.01);
                 lbm.reinit(temp);
+
+                prevX = event.clientX;
+                prevY = event.clientY;
+
+            });
+
+            canvas.addEventListener("mouseup", event => {
+                prevX = null;
+                prevY = null;
+            });
+
+            canvas.addEventListener("mouseout", event => {
+                prevX = null;
+                prevY = null;
             });
 
             canvas.height = ch;
             canvas.width = cw;
 
+            let dt_sec_ema = 0.0;
+            const alpha = 0.3;
+
             const drawPlot = (time) => {
 
                 const dt_ms = time - prev_time;
-                const dt_sec = dt_ms / 1000.0;
-                const fps = Math.floor(1 / dt_sec);
+                const dt_sec = (dt_ms / 1000.0);
+                dt_sec_ema = dt_sec * alpha + dt_sec_ema * (1 - alpha);
+                const fps = Math.floor(1 / dt_sec_ema);
                 prev_time = time;
 
                 document.getElementById("fps").textContent = fps + " fps";
@@ -292,9 +322,9 @@
                 const dx = cw / nx;
                 const dy = ch / ny;
 
-                const vm = 0.05;
-                const dr = 0.05;
-                const dc = 0.012;
+                const vm = 0.12;
+                const dr = 0.07;
+                const dc = 0.013;
 
                 for (let i = 0; i < nx; i++) {
                     for (let j = 0; j < ny; j++) {
@@ -383,7 +413,36 @@
         document.getElementById("plot_vals").addEventListener("input", (event) => {
             plot_vals = event.target.value;
             console.log(plot_vals)
-        })
+        });
+
+        // see: https://stackoverflow.com/questions/1517924/javascript-mapping-touch-events-to-mouse-events
+        function touchHandler(event) {
+            let touches = event.changedTouches,
+                first = touches[0],
+                type = "";
+
+            switch (event.type) {
+                case "touchstart": type = "mousedown"; break;
+                case "touchmove": type = "mousemove"; event.preventDefault(); break;
+                case "touchend": type = "mouseup"; break;
+                default: return;
+            }
+
+            let simulatedEvent = new MouseEvent(type, {
+                screenX: first.screenX,
+                screenY: first.screenY,
+                clientX: first.clientX,
+                clientY: first.clientY
+            });
+
+            // console.log(simulatedEvent, first.target);
+            first.target.dispatchEvent(simulatedEvent);
+        }
+
+        document.getElementById("canvas").addEventListener("touchstart", touchHandler, true);
+        document.getElementById("canvas").addEventListener("touchmove", touchHandler, true);
+        document.getElementById("canvas").addEventListener("touchend", touchHandler, true);
+        document.getElementById("canvas").addEventListener("touchcancel", touchHandler, true);
 
         run();
     </script>
