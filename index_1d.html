@@ -62,7 +62,7 @@
         const vel_z = 0.0;
         const vel_s = 1e4 * 2; // 1 bp = 2 px
 
-        const steps_per_frame = 25;
+        const steps_per_frame = 24;
 
         var lbm;
         var rho;
@@ -242,9 +242,7 @@
 
                 // --- Update the simulation.
 
-                for (let n = 0; n < steps_per_frame; n++) {
-                    lbm.step(tau, temp);
-                }
+                lbm.step_n(tau, steps_per_frame);
 
                 tracers.interp_vel(lbm);
                 tracers.update(steps_per_frame);

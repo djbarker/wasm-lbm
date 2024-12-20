@@ -54,7 +54,7 @@
         var temp = 1.00;
         var tau = 0.53;
 
-        const steps_per_frame = 15;
+        const steps_per_frame = 16;
 
         var lbm;
         var rho;
@@ -62,7 +62,6 @@
         var curl;
 
         var plot_vals = "curl"
-        var prev_time = 0;
 
         var img_buff = new Uint8ClampedArray(nx * ny * 4);
         for (let i = 0; i < nx * nx * 4; i++) {
@@ -305,19 +304,26 @@
             let dt_sec_ema = -1.0;
             const alpha = 0.025;
 
+            let ploti = 0;
+            let plott = 0;
+            const fps_n = 30;
+
             const drawPlot = (time) => {
 
-                const dt_ms = time - prev_time;
-                const dt_sec = Math.min((dt_ms / 1000.0), 5);
-                if (dt_sec_ema > 0) {
-                    dt_sec_ema = dt_sec * alpha + dt_sec_ema * (1 - alpha);
-                } else {
-                    dt_sec_ema = dt_sec;
-                }
-                const fps = Math.floor(1 / dt_sec_ema);
-                prev_time = time;
+                if (ploti == fps_n) {
+                    const dt_ms = time - plott;
+                    const dt_sec = Math.min((dt_ms / 1000.0), 5.0);
 
-                document.getElementById("fps").textContent = fps + " fps";
+                    const fps = Math.floor(fps_n / dt_sec);
+                    const mlups = Math.floor(fps_n * nx * ny * steps_per_frame / dt_sec / 1e6);
+
+                    document.getElementById("fps").textContent = fps + " fps  (" + mlups + " Mlups)";
+
+                    ploti = 0;
+                    plott = time;
+                } else {
+                    ploti++;
+                }
 
                 ctx.clearRect(0, 0, cw, ch)
 

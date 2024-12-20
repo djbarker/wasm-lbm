@@ -11,6 +11,9 @@ mod vect_s;
 use vect_d::VectD;
 use vect_s::VectS;
 
+// re-export
+// pub use wasm_bindgen_rayon::init_thread_pool;
+
 fn sub_to_idx<const D: usize>(sub: VectS<isize, D>, counts: VectS<isize, D>) -> isize {
     let mut idx = 0;
     let mut stride = 1;
@@ -77,37 +80,223 @@ fn calc_f_eq<const D: usize, const Q: usize>(
 ) -> VectS<f32, Q> {
     let vv = (vel * vel).sum();
     
-    if (D == 2) && (Q == 9) {
-        // Explicitly write out D2Q9 feq calculation
+    // if (D == 2) && (Q == 9) && false {
+    //     // Explicitly write out D2Q9 feq calculation
         
-        let v = vel;
-        let mut out = VectS::zero();
+    //     let v = vel;
+    //     let mut out = VectS::zero();
     
-        let vxx = v[0] * v[0];
-        let vyy = v[1] * v[1];
-        let vxy = v[0] * v[1];
+    //     let vxx = v[0] * v[0];
+    //     let vyy = v[1] * v[1];
+    //     let vxy = v[0] * v[1];
 
-        // 0:        1:       2:       3:       4:      5:      6:       7:      8:
-        // [-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 0], [0, 1], [1, -1], [1, 0], [1, 1]
-        out[4] = rho * (2.0 / 9.0)  * (2.0 - 3.0 * vv);
-        out[7] = rho * (1.0 / 18.0) * (2.0 + 6.0 * v[0] + 9.0 * vxx - 3.0 * vv);
-        out[1] = rho * (1.0 / 18.0) * (2.0 - 6.0 * v[0] + 9.0 * vxx - 3.0 * vv);
-        out[5] = rho * (1.0 / 18.0) * (2.0 + 6.0 * v[1] + 9.0 * vyy - 3.0 * vv);
-        out[3] = rho * (1.0 / 18.0) * (2.0 - 6.0 * v[1] + 9.0 * vyy - 3.0 * vv);
-        out[8] = rho * (1.0 / 36.0) * (1.0 + 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv);
-        out[0] = rho * (1.0 / 36.0) * (1.0 - 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv);
-        out[2] = rho * (1.0 / 36.0) * (1.0 + 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv);
-        out[6] = rho * (1.0 / 36.0) * (1.0 - 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv);
+    //     // 0:        1:       2:       3:       4:      5:      6:       7:      8:
+    //     // [-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 0], [0, 1], [1, -1], [1, 0], [1, 1]
+    //     out[4] = rho * (2.0 / 9.0)  * (2.0 - 3.0 * vv);
+    //     out[7] = rho * (1.0 / 18.0) * (2.0 + 6.0 * v[0] + 9.0 * vxx - 3.0 * vv);
+    //     out[1] = rho * (1.0 / 18.0) * (2.0 - 6.0 * v[0] + 9.0 * vxx - 3.0 * vv);
+    //     out[5] = rho * (1.0 / 18.0) * (2.0 + 6.0 * v[1] + 9.0 * vyy - 3.0 * vv);
+    //     out[3] = rho * (1.0 / 18.0) * (2.0 - 6.0 * v[1] + 9.0 * vyy - 3.0 * vv);
+    //     out[8] = rho * (1.0 / 36.0) * (1.0 + 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv);
+    //     out[0] = rho * (1.0 / 36.0) * (1.0 - 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv);
+    //     out[2] = rho * (1.0 / 36.0) * (1.0 + 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv);
+    //     out[6] = rho * (1.0 / 36.0) * (1.0 - 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv);
         
-        out
-    } else {
+    //     out
+    // } else {
         let mut out = ws;
         for i in 0..Q {
             let vq = (vel * qs[i]).sum();
             out[i] *= rho * (1.0 + 3.0 * vq - 1.5 * vv + 4.5 * vq * vq);
         }
         out
+    // }
+}
+
+fn update_generic_bgk<const D: usize, const Q: usize>(
+    even: bool,
+    omega: f32,
+    f: &mut VectD<VectS<f32, Q>>,
+    rho: &mut VectD<f32>,
+    vel: &mut VectD<VectS<f32, D>>,
+    idx: VectS<isize, Q>,
+    ws: VectS<f32, Q>,
+    qs: [VectS<f32, D>; Q],
+    js: [usize; Q],
+) {
+    // collect fs
+    let mut f_: VectS<f32, Q> = VectS::default();
+    for i in 0..Q {
+        f_[i] = if even { f[idx[i]][i] } else { f[idx[0]][js[i]] };
     }
+
+    // calc moments
+    let r = f_.sum();
+    let mut v = VectS::<f32, D>::zero();
+    for i in 0..Q {
+        v += f_[i] * qs[i] / r;
+    }
+    let v = v; // no mut
+    let vv = (v * v).sum();
+
+    // calc equilibrium & collide
+    for i in 0..Q {
+        let vq = (v * qs[i]).sum();
+        let feq = r * ws[i] * (1.0 + 3.0 * vq - 1.5 * vv + 4.5 * vq * vq);
+        f_[i] += omega * (feq - f_[i]);
+    }
+    // let feq = calc_f_eq(r, v, ws, qs);  // TODO: calc_f_eq uses different index convention for D2Q9
+    // f_ += omega * (feq - f_);
+
+    // write back to same locations
+    for i in 0..Q {
+        if even {
+            let j = js[i];
+            f[idx[j]][j] = f_[i];
+        } else {
+            f[idx[0]][i] = f_[i];
+        }
+    }
+
+    // update the macroscopic observables
+    rho[idx[0]] = r;
+    vel[idx[0]] = v;
+}
+
+fn update_d1q3_bgk<const D: usize, const Q: usize>(
+    even: bool,
+    omega: f32,
+    f: &mut VectD<VectS<f32, Q>>,
+    rho: &mut VectD<f32>,
+    vel: &mut VectD<VectS<f32, D>>,
+    idx: VectS<isize, Q>,
+) {
+    // Boo; we have to make this function generic but only want D1Q3.
+    assert_eq!(D, 1);
+    assert_eq!(Q, 3);
+
+    // collect fs
+    let (f0, f1, f2) = if even {
+        (f[idx[0]][0], f[idx[1]][1], f[idx[2]][2])
+    } else {
+        (f[idx[0]][0], f[idx[0]][2], f[idx[0]][1])
+    };
+
+    // calc moments
+    let r = f0 + f1 + f2;
+    let v = (f1 - f2) / r;
+    let vv = v * v;
+
+    // calc equilibrium
+    let f0eq = r * (1. / 3.) * (2. - 3. * vv);
+    let f1eq = r * (1. / 12.) * (2. + 6. * v + 6. * vv);
+    let f2eq = r * (1. / 12.) * (2. - 6. * v + 6. * vv);
+
+    // write back to same locations
+    if even {
+        f[idx[0]][0] = f0 + omega * (f0eq - f0);
+        f[idx[2]][2] = f1 + omega * (f1eq - f1);
+        f[idx[1]][1] = f2 + omega * (f2eq - f2);
+    } else {
+        f[idx[0]][0] = f0 + omega * (f0eq - f0);
+        f[idx[0]][1] = f1 + omega * (f1eq - f1);
+        f[idx[0]][2] = f2 + omega * (f2eq - f2);
+    }
+
+    rho[idx[0]] = r;
+    vel[idx[0]][0] = v;
+}
+
+#[rustfmt::skip]
+fn update_d2q9_bgk<const D: usize, const Q: usize>(
+    even: bool,
+    omega: f32,
+    f: &mut VectD<VectS<f32, Q>>,
+    rho: &mut VectD<f32>,
+    vel: &mut VectD<VectS<f32, D>>,
+    idx: VectS<isize, Q>,
+) {
+    // Boo; we have to make this function generic but only want D2Q9.
+    assert_eq!(D, 2);
+    assert_eq!(Q, 9);
+
+    // collect fs
+    let mut f_ = VectS::new(if even {
+        [
+            f[idx[0]][0],
+            f[idx[1]][1],
+            f[idx[2]][2],
+            f[idx[3]][3],
+            f[idx[4]][4],
+            f[idx[5]][5],
+            f[idx[6]][6],
+            f[idx[7]][7],
+            f[idx[8]][8],
+        ]
+    } else {
+        [
+            f[idx[0]][0],
+            f[idx[0]][2],
+            f[idx[0]][1],
+            f[idx[0]][6],
+            f[idx[0]][8],
+            f[idx[0]][7],
+            f[idx[0]][3],
+            f[idx[0]][5],
+            f[idx[0]][4],
+        ]
+    });
+
+    // 0:  0  0
+    // 1:  0 +1
+    // 2:  0 -1
+    // 3: +1  0
+    // 4: +1 +1
+    // 5: +1 -1
+    // 6: -1  0
+    // 7: -1 +1
+    // 8: -1 -1
+
+    // calc moments
+    let r = f_.sum();
+    let mut v: VectS<f32, D> = VectS::zero();
+    v[0] = (f_[3] + f_[4] + f_[5] - f_[6] - f_[7] - f_[8]) / r;
+    v[1] = (f_[1] - f_[2] + f_[4] - f_[5] + f_[7] - f_[8]) / r;
+    let vv = (v * v).sum();
+    let vxx = v[0] * v[0];
+    let vyy = v[1] * v[1];
+    let vxy = v[0] * v[1];
+
+    // calc equilibrium & collide
+    f_[0] += omega * (r * (2.0 / 9.0) * (2.0 - 3.0 * vv) - f_[0]);
+    f_[1] += omega * (r * (1.0 / 18.0) * (2.0 + 6.0 * v[1] + 9.0 * vyy - 3.0 * vv) - f_[1]);
+    f_[2] += omega * (r * (1.0 / 18.0) * (2.0 - 6.0 * v[1] + 9.0 * vyy - 3.0 * vv) - f_[2]);
+    f_[3] += omega * (r * (1.0 / 18.0) * (2.0 + 6.0 * v[0] + 9.0 * vxx - 3.0 * vv) - f_[3]);
+    f_[4] += omega * (r * (1.0 / 36.0) * (1.0 + 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv) - f_[4]);
+    f_[5] += omega * (r * (1.0 / 36.0) * (1.0 - 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv) - f_[5]);
+    f_[6] += omega * (r * (1.0 / 18.0) * (2.0 - 6.0 * v[0] + 9.0 * vxx - 3.0 * vv) - f_[6]);
+    f_[7] += omega * (r * (1.0 / 36.0) * (1.0 + 3.0 * (v[1] - v[0]) - 9.0 * vxy + 3.0 * vv) - f_[7]);
+    f_[8] += omega * (r * (1.0 / 36.0) * (1.0 - 3.0 * (v[0] + v[1]) + 9.0 * vxy + 3.0 * vv) - f_[8]);
+
+    // write back to same locations
+    if even {
+        f[idx[0]][0] = f_[0];
+        f[idx[2]][2] = f_[1];
+        f[idx[1]][1] = f_[2];
+        f[idx[6]][6] = f_[3];
+        f[idx[8]][8] = f_[4];
+        f[idx[7]][7] = f_[5];
+        f[idx[3]][3] = f_[6];
+        f[idx[5]][5] = f_[7];
+        f[idx[4]][4] = f_[8];
+    } else {
+        for i in 0..9 {
+            f[idx[0]][i] = f_[i];
+        }
+    }
+
+    rho[idx[0]] = r;
+    vel[idx[0]] = v;
 }
 
 #[rustfmt::skip]
@@ -154,14 +343,15 @@ fn collide<const D: usize, const Q: usize>(
 struct LBM<const D: usize, const Q: usize> {
     ws: VectS<f32, Q>,
     qs: [VectS<f32, D>; Q],
+    js: [usize; Q],
 
     cnt: VectS<isize, D>,
 
-    // downstream indices for each cell
+    // upstream indices for each cell
     idx: VectD<VectS<isize, Q>>,
 
-    f1: VectD<VectS<f32, Q>>,
-    f2: VectD<VectS<f32, Q>>,
+    even: bool,
+    f: VectD<VectS<f32, Q>>,
 
     rho: VectD<f32>,
     vel: VectD<VectS<f32, D>>,
@@ -177,7 +367,7 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
         let mut sub = VectS::zero();
         for i in 0..(n as isize) {
             for q in 0..Q {
-                let sub_ = sub + qs[q].cast();
+                let sub_ = sub - qs[q].cast();
                 let sub_ = vmod(sub_, cnt);
                 let j = sub_to_idx(sub_, cnt);
                 idx[i][q] = j;
@@ -186,13 +376,37 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
             sub = raster(sub, cnt);
         }
 
+        // initialize negative indicies
+        // This is a very noddy O(Q^2) and I'm sure we can do better, but Q is small.
+        let mut js = [0; Q];
+        for i in 0..Q {
+            for j in 0..Q {
+                let qij = qs[i] + qs[j];
+                if (qij * qij).sum() < 1e-8 {
+                    js[i] = j;
+                    break;
+                }
+            }
+        }
+        for i in 0..Q {
+            let mut found = false;
+            for j in 0..Q {
+                if js[j] == i {
+                    found = true;
+                    break;
+                }
+            }
+            assert!(found);
+        }
+
         let mut out = LBM {
             ws: VectS::new(ws),
             qs: qs,
+            js: js,
             cnt: cnt,
             idx: idx,
-            f1: VectD::zeros(n),
-            f2: VectD::zeros(n),
+            even: true,
+            f: VectD::zeros(n),
             rho: VectD::ones(n),
             vel: VectD::zeros(n),
         };
@@ -204,42 +418,49 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
     // as set by the macroscopic quantities.
     pub fn reinit(&mut self) {
         for i in 0..self.cnt.prod() {
-            self.f1[i] = calc_f_eq(self.rho[i], self.vel[i], self.ws, self.qs);
+            self.f[i] = calc_f_eq(self.rho[i], self.vel[i], self.ws, self.qs);
         }
     }
 
     /// Basic implementation of one iteration of the LBM method.
     pub fn step(&mut self, tau: f32) {
-        // NOTE: Combing the loops below is not optimal.
-        //       This way we read from f1 in contiguously, which seems to be marginally better than
-        //       writing to f2 contiguously.
-
+        let omega = 1. / tau;
+        // TODO: parallelize this!
         for i in 0..self.cnt.prod() {
-            // stream
-            for q in 0..Q {
-                let j = self.idx[i][q];
-                self.f2[j][q] = self.f1[i][q];
+            if (D == 1) && (Q == 3) {
+                update_d1q3_bgk(
+                    self.even,
+                    omega,
+                    &mut self.f,
+                    &mut self.rho,
+                    &mut self.vel,
+                    self.idx[i],
+                );
+            } else if (D == 2) && (Q == 9) {
+                update_d2q9_bgk(
+                    self.even,
+                    omega,
+                    &mut self.f,
+                    &mut self.rho,
+                    &mut self.vel,
+                    self.idx[i],
+                );
+            } else {
+                update_generic_bgk(
+                    self.even,
+                    omega,
+                    &mut self.f,
+                    &mut self.rho,
+                    &mut self.vel,
+                    self.idx[i],
+                    self.ws,
+                    self.qs,
+                    self.js,
+                )
             }
         }
 
-        let omega = 1.0 / tau;
-
-        for i in 0..self.cnt.prod() {
-            // macro
-            self.rho[i] = self.f2[i].sum();
-            self.vel[i] = self.f2[i].map_with_idx(|i, f| f * self.qs[i]).sum() / self.rho[i];
-
-            collide(
-                &mut self.f2[i],
-                omega,
-                self.rho[i],
-                self.vel[i],
-                self.ws,
-                self.qs,
-            );
-        }
-
-        std::mem::swap(&mut self.f1, &mut self.f2);
+        self.even = !self.even;
     }
 }
 
@@ -248,8 +469,8 @@ struct D1Q3 {
     lbm: LBM<1, 3>,
 }
 
-static D1Q3_Q: [VectS<f32, 1>; 3] = [VectS::new([-1.0]), VectS::new([0.0]), VectS::new([1.0])];
-static D1Q3_W: [f32; 3] = [1. / 6., 4. / 6., 1. / 6.];
+static D1Q3_Q: [VectS<f32, 1>; 3] = [VectS::new([0.0]), VectS::new([1.0]), VectS::new([-1.0])];
+static D1Q3_W: [f32; 3] = [4. / 6., 1. / 6., 1. / 6.];
 
 #[wasm_bindgen]
 impl D1Q3 {
@@ -272,7 +493,7 @@ impl D1Q3 {
     }
 
     pub fn step(&mut self, tau: f32) {
-        self.lbm.step(tau)
+        self.lbm.step(tau);
     }
 
     pub fn rho_(&mut self) -> *mut f32 {
@@ -385,7 +606,7 @@ impl D2Q9 {
     }
 
     pub fn step(&mut self, tau: f32) {
-        self.lbm.step(tau)
+        self.lbm.step(tau);
     }
 
     pub fn calc_curl(&mut self) {
