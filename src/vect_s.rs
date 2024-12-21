@@ -203,6 +203,32 @@ where
     }
 }
 
+impl<T, const D: usize> Add<T> for VectS<T, D>
+where
+    T: Copy + Add<Output = T>,
+{
+    type Output = Self;
+
+    fn add(self, rhs: T) -> Self::Output {
+        Self {
+            data: self.data.map(|x| x + rhs),
+        }
+    }
+}
+
+impl<T, const D: usize> Sub<T> for VectS<T, D>
+where
+    T: Copy + Sub<Output = T>,
+{
+    type Output = Self;
+
+    fn sub(self, rhs: T) -> Self::Output {
+        Self {
+            data: self.data.map(|x| x - rhs),
+        }
+    }
+}
+
 impl<T, const D: usize> Mul<T> for VectS<T, D>
 where
     T: Copy + Mul<Output = T>,

@@ -1,8 +1,9 @@
+mod raster;
 mod utils;
 
-use std::ops::{Add, Rem};
-
 use num_traits::{One, Zero};
+use raster::{sub_to_idx, Raster};
+use utils::{fmod, split_int_frac, vmod};
 use wasm_bindgen::prelude::*;
 
 mod vect_d;
@@ -11,62 +12,37 @@ mod vect_s;
 use vect_d::VectD;
 use vect_s::VectS;
 
-// re-export
+// re-exports
+pub use wasm_bindgen::memory;
 // pub use wasm_bindgen_rayon::init_thread_pool;
 
-fn sub_to_idx<const D: usize>(sub: VectS<isize, D>, counts: VectS<isize, D>) -> isize {
-    let mut idx = 0;
-    let mut stride = 1;
-    for i in 0..D {
-        idx += stride * sub[i];
-        stride *= counts[i] as isize;
-    }
-    idx
-}
-
-fn raster<const D: usize>(mut sub: VectS<isize, D>, counts: VectS<isize, D>) -> VectS<isize, D> {
-    sub[0] += 1;
-    for d in 0..(D - 1) {
-        if sub[d] == counts[d] {
-            sub[d] = 0;
-            sub[d + 1] += 1;
-        } else {
-            // If we did not hit the end no need to check others since they won't have been bumped.
-            break;
+fn copy_periodic<T, const D: usize>(arr: &mut VectD<T>, cnt_pad: VectS<isize, D>)
+where
+    T: Copy,
+{
+    if D == 1 {
+        // xlower -> xupper:
+        arr[cnt_pad[0] - 1] = arr[1];
+        // xupper -> xlower:
+        arr[0] = arr[cnt_pad[0] - 2];
+    } else if D == 2 {
+        for yidx in 0..cnt_pad[1] {
+            // xlower -> xupper:
+            arr[yidx * cnt_pad[0] + (cnt_pad[0] - 1)] = arr[yidx * cnt_pad[0] + 1];
+            // xupper -> xlower:
+            arr[yidx * cnt_pad[0] + 0] = arr[yidx * cnt_pad[0] + (cnt_pad[0] - 2)];
         }
+        for xidx in 0..cnt_pad[0] {
+            // ylower -> yupper:
+            arr[(cnt_pad[1] - 1) * cnt_pad[0] + xidx] = arr[1 * cnt_pad[0] + xidx];
+            // yupper -> ylower:
+            arr[0 * cnt_pad[0] + xidx] = arr[(cnt_pad[1] - 2) * cnt_pad[0] + xidx];
+        }
+    } else {
+        // TODO: Would be nice to make this generic, or at least have the 3D code handle 2D and 1D
+        //       by faking width (& depth) of 1 cell.
+        panic!()
     }
-    // if sub[D - 1] == counts[D - 1] {
-    //     panic!("Raster past end!")
-    // }
-    sub
-}
-
-fn raster_end<const D: usize>(counts: VectS<isize, D>) -> VectS<isize, D> {
-    let end = counts - VectS::one();
-    raster(end, counts)
-}
-
-// Split a (sufficiently small & positive) float into its integer and fractional parts.
-fn split_int_frac(x: f32) -> (i32, f32) {
-    let i = x.floor();
-    let f = x - i;
-    (i as i32, f)
-}
-
-/// Modulo operation which handles -ve `x`.
-fn fmod<T>(x: T, m: T) -> T
-where
-    T: Rem<Output = T> + Add<Output = T> + Copy,
-{
-    (x + m) % m
-}
-
-/// Elementwise modulo the components of `x` with those of `m`.  
-fn vmod<const D: usize, T>(x: VectS<T, D>, m: VectS<T, D>) -> VectS<T, D>
-where
-    T: Rem<Output = T> + Add<Output = T> + Copy + Default + 'static,
-{
-    x.map_with_idx(|j, x| fmod(x, m[j]))
 }
 
 /// Calculate the approximate equilibrium distribution for the given density,
@@ -364,8 +340,8 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
 
         // initialize offset vectors
         let mut idx: VectD<VectS<isize, Q>> = VectD::zeros(n);
-        let mut sub = VectS::zero();
-        for i in 0..(n as isize) {
+        let mut i = 0;
+        for sub in Raster::new(cnt) {
             for q in 0..Q {
                 let sub_ = sub - qs[q].cast();
                 let sub_ = vmod(sub_, cnt);
@@ -373,7 +349,7 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
                 idx[i][q] = j;
             }
 
-            sub = raster(sub, cnt);
+            i += 1;
         }
 
         // initialize negative indicies
@@ -388,6 +364,8 @@ impl<const D: usize, const Q: usize> LBM<D, Q> {
                 }
             }
         }
+
+        // Sanity check: all indicies appear in the negative index array.
         for i in 0..Q {
             let mut found = false;
             for j in 0..Q {
@@ -721,58 +699,4 @@ impl Tracers1D {
 #[wasm_bindgen]
 pub fn wasm_memory() -> JsValue {
     wasm_bindgen::memory()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sub_to_idx() {
-        let cnt = VectS::new([30, 50, 70]);
-        let sub = VectS::new([0, 0, 0]);
-        assert_eq!(sub_to_idx(sub, cnt), 0);
-
-        let sub = VectS::new([1, 0, 0]);
-        assert_eq!(sub_to_idx(sub, cnt), 1);
-
-        let sub = VectS::new([0, 1, 0]);
-        assert_eq!(sub_to_idx(sub, cnt), 30);
-
-        let sub = VectS::new([0, 0, 1]);
-        assert_eq!(sub_to_idx(sub, cnt), 30 * 50);
-
-        let sub = VectS::new([29, 49, 69]);
-        assert_eq!(sub_to_idx(sub, cnt), 30 * 50 * 70 - 1);
-    }
-
-    #[test]
-    fn test_raster() {
-        let cnt = VectS::new([2, 2, 2]);
-        let mut sub = VectS::new([0, 0, 0]);
-
-        sub = raster(sub, cnt);
-        assert_eq!(sub, VectS::new([1, 0, 0]));
-
-        sub = raster(sub, cnt);
-        assert_eq!(sub, VectS::new([0, 1, 0]));
-
-        sub = raster(sub, cnt);
-        assert_eq!(sub, VectS::new([1, 1, 0]));
-
-        sub = raster(sub, cnt);
-        assert_eq!(sub, VectS::new([0, 0, 1]));
-
-        sub = raster(sub, cnt);
-        assert_eq!(sub, VectS::new([1, 0, 1]));
-
-        sub = raster(sub, cnt);
-        assert_eq!(sub, VectS::new([0, 1, 1]));
-
-        sub = raster(sub, cnt);
-        assert_eq!(sub, VectS::new([1, 1, 1]));
-
-        // TODO: check one more panics
-        // sub = raster(sub, cnt);
-    }
 }
