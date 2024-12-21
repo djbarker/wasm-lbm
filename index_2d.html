@@ -350,7 +350,7 @@
                             const theta = Math.atan2(vy, vx);
                             const h = 360 * theta / (2 * Math.PI);
                             const s = Math.max(Math.min(v2 / vm, 1.0), 0.0);
-                            const l = 0.6 - 0.1 * s;
+                            const l = 0.8 * s;
 
                             [r, g, b] = hsl_to_rgb(h, s, l);
                         }
