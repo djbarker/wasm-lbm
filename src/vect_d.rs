@@ -4,6 +4,8 @@ use num_traits::{One, Zero};
 
 // D => "dynamic", i.e. size known at run-time
 // Wraps a std::Vec but gives us some convenience indexing.
+// Intention was to allow Python-like negative indexing but I ended up not needing it.
+// So, currently this is a pretty pointless wrapper around std::Vec.
 #[derive(Debug, Clone)]
 pub struct VectD<T> {
     pub data: Vec<T>,
@@ -43,11 +45,11 @@ impl<T> Index<isize> for VectD<T> {
     type Output = T;
 
     fn index(&self, index: isize) -> &Self::Output {
-        let index = if index >= 0 {
-            index
-        } else {
-            self.data.len() as isize + index
-        };
+        // let index = if index >= 0 {
+        //     index
+        // } else {
+        //     self.data.len() as isize + index
+        // };
 
         return unsafe { &self.data.get_unchecked(index as usize) };
     }
@@ -55,11 +57,11 @@ impl<T> Index<isize> for VectD<T> {
 
 impl<T> IndexMut<isize> for VectD<T> {
     fn index_mut(&mut self, index: isize) -> &mut Self::Output {
-        let index = if index >= 0 {
-            index
-        } else {
-            self.data.len() as isize + index
-        };
+        // let index = if index >= 0 {
+        //     index
+        // } else {
+        //     self.data.len() as isize + index
+        // };
 
         return unsafe { self.data.get_unchecked_mut(index as usize) };
     }
